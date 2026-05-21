@@ -7,6 +7,234 @@ I built the code around a reusable `ProductTrader` base class so that I could us
 The main idea was to avoid writing the same trading utilities again and again. `ProductTrader` handles the common parts, while each strategy only focuses on its own signal and execution logic.
 
 ---
+# Rounds 3 and 4 Strategy
+
+For Rounds 3 and 4, I traded:
+
+- `HYDROGEL_PACK`
+- `VELVETFRUIT_EXTRACT`
+- Velvetfruit Extract vouchers/options: `VEV_4000` to `VEV_6500`
+
+At first, I tried to build an options strategy using the volatility smile of the vouchers. The idea was to compare voucher prices across strikes and find mispriced options. However, after testing, this did not give enough stable profit, so I decided to drop the volatility smile strategy.
+
+Instead, I used a simpler approach based on mean reversion, directional signals, voucher leverage, and in Round 4, counterparty information.
+
+---
+
+## Hydrogel Pack Strategy
+
+For `HYDROGEL_PACK`, I used a mean-reversion style strategy.
+
+I set a fair value around:
+
+```python
+fair_value = 9990
+```
+
+The strategy looked at the current order book and compared the market level with this fair value.
+
+If the market traded too low, the strategy became bullish.  
+If the market traded too high, the strategy became bearish.
+
+```python
+if wall_mid < fair_value - buy_threshold:
+    signal = +1
+
+elif wall_mid > fair_value + sell_threshold:
+    signal = -1
+```
+
+The signal was stored in `traderData`, so it could persist across ticks.
+
+---
+
+## Support and Resistance
+
+For Hydrogel, I also added support and resistance levels.
+
+```python
+support_level = 9925
+resistance_level = 10050
+```
+
+If the best ask was below the support level, the strategy bought aggressively.
+
+If the best bid was above the resistance level, the strategy sold aggressively.
+
+This helped the strategy react quickly when the market moved to extreme levels.
+
+---
+
+## Microstructure Trading
+
+When there was no strong support or resistance signal, the strategy looked for small short-term opportunities around `wall_mid`.
+
+It created a small band:
+
+```python
+buy_band = wall_mid - micro_band
+sell_band = wall_mid + micro_band
+```
+
+If an ask was below the buy band, it bought.  
+If a bid was above the sell band, it sold.
+
+This was a simple way to capture local mispricing in the order book.
+
+---
+
+## Velvetfruit Extract Strategy
+
+For `VELVETFRUIT_EXTRACT`, I used another mean-reversion signal.
+
+I set a fair value around:
+
+```python
+fair_value = 5250
+```
+
+and used a threshold:
+
+```python
+threshold = 28
+```
+
+The strategy calculated the mid price:
+
+```python
+mid_price = (best_bid + best_ask) / 2
+```
+
+Then it generated a directional signal:
+
+```python
+if mid_price < fair_value - threshold:
+    signal = +1
+
+elif mid_price > fair_value + threshold:
+    signal = -1
+```
+
+If the signal was positive, the strategy bought Velvetfruit Extract.  
+If the signal was negative, the strategy sold Velvetfruit Extract.
+
+---
+
+## Voucher Strategy
+
+Instead of using the volatility smile in the final version, I used the vouchers as directional leverage on the Velvetfruit Extract signal.
+
+When the main Velvetfruit signal was bullish, the strategy bought vouchers.
+
+When the main Velvetfruit signal was bearish, the strategy sold vouchers.
+
+```text
+bullish VELVETFRUIT_EXTRACT signal -> buy vouchers
+bearish VELVETFRUIT_EXTRACT signal -> sell vouchers
+```
+
+The vouchers traded were:
+
+```python
+VEV_5000
+VEV_5100
+VEV_5200
+VEV_5300
+VEV_5400
+VEV_4000
+VEV_4500
+```
+
+Each voucher had its own position limit of `300`.
+
+The strategy checked each voucher's order book and traded at the best bid or best ask depending on the signal.
+
+---
+
+## Voucher Market Making
+
+When there was no active Velvetfruit signal, I allowed limited market making on selected vouchers:
+
+```python
+mm_vouchers = {"VEV_4000", "VEV_4500"}
+```
+
+The strategy only market made when the spread was wide enough:
+
+```python
+min_mm_spread = 4
+```
+
+It placed small orders inside the spread:
+
+```python
+bid_price = best_bid + 1
+ask_price = best_ask - 1
+```
+
+This gave the strategy another way to earn small profits when there was no strong directional signal.
+
+---
+
+## Round 4 Counterparty Information
+
+In Round 4, counterparty names became visible in the market trades.
+
+I used this information to track one important participant:
+
+```python
+INFORMED_TRADER_ID_67 = "Mark 67"
+```
+
+The idea was that if Mark 67 was buying or selling persistently, that could give useful information about future price direction.
+
+The strategy tracked whether Mark's activity was recent and whether the signal was still alive using timestamp windows:
+
+```python
+MARK_RECENT_WINDOW = 5000
+MARK_STALE_WINDOW = 50000
+```
+
+This gave the strategy an extra source of information beyond just price and order book data.
+
+---
+
+## Risk Management
+
+The strategy respected the round position limits:
+
+```python
+HYDROGEL_PACK: 200
+VELVETFRUIT_EXTRACT: 200
+Each voucher: 300
+```
+
+Before placing trades, the code checked current position and clipped order size so it did not exceed the allowed limit.
+
+Example:
+
+```python
+trade_size = min(order_volume, position_limit - current_position)
+```
+
+This helped keep the strategy inside the competition rules.
+
+---
+
+## Final Approach
+
+My final approach for Rounds 3 and 4 was:
+
+1. try volatility smile trading on vouchers
+2. drop it because it did not produce enough profit
+3. use mean reversion for `HYDROGEL_PACK`
+4. use mean reversion for `VELVETFRUIT_EXTRACT`
+5. use vouchers as directional leverage
+6. market make selected vouchers when there was no active signal
+7. use Round 4 counterparty information to track Mark 67
+
+The final strategy was simpler than a full options-pricing model, but it was more practical for the competition environment and worked better with the available signals.
+
 
 ## What I Tried
 
