@@ -1,271 +1,182 @@
-# IMC Prosperity 4 Trading Strategies
+# IMC Prosperity 4
 
-This repository contains my algorithmic trading code for the IMC Prosperity 4 competition.
+This repository contains my final trading code for IMC Prosperity 4.
 
-The final trading system is built around a reusable `ProductTrader` base class and several product-specific strategy classes. Each strategy focuses on a different type of market behavior observed during research and backtesting.
+I built the code around a reusable `ProductTrader` base class so that I could use the same order-book, position-limit, and order-placement logic across multiple products. Each actual strategy is written as a separate trader class on top of that base.
 
-The goal of the codebase is to make strategy development repeatable: shared trading utilities live in one place, while each product strategy only contains the logic needed to generate signals and orders.
+The main idea was to avoid writing the same trading utilities again and again. `ProductTrader` handles the common parts, while each strategy only focuses on its own signal and execution logic.
 
 ---
 
-## Core Architecture
+## What I Tried
 
-The code is organized around one base trader class:
+Round 5 introduced 50 new products across 10 different product groups. Since every product had a position limit of `10`, I had to be selective about which products and strategies were worth using.
 
-```python
-class ProductTrader:
+I tested different ideas across the product groups and kept the ones that looked most useful in backtesting.
+
+The final code mainly uses:
+
+- market making for products where simple spread capture worked best
+- Snackpack pairs trading using the Vanilla and Raspberry spread
+- Microchip lead-lag rules between related microchip products
+- lattice reversal trading for products with large grid-like jumps
+- market making on Pebbles after the basket approach did not perform well enough
+
+---
+
+## Code Structure
+
+The code is built around this structure:
+
+```text
+ProductTrader
+├── StaticTrader
+├── SnackpackPairsTrader
+├── MicrochipRuleTrader
+└── LatticeTrader
 ```
 
-`ProductTrader` handles the common trading mechanics used by all strategies:
+`ProductTrader` is the base class used by all strategies.
+
+It handles things like:
 
 - reading the order book
-- finding best bid and best ask
-- calculating position limits
-- tracking current inventory
-- computing available buy and sell capacity
-- creating buy and sell orders
-- storing shared strategy state through `traderData`
-- writing debug information into a shared print/log object
+- finding the best bid and best ask
+- checking current position
+- calculating how much I am allowed to buy or sell
+- placing buy and sell orders
+- storing data between ticks using `traderData`
 
-Each individual strategy then subclasses `ProductTrader`.
-
-Example:
-
-```python
-class StaticTrader(ProductTrader):
-    ...
-
-class MicrochipRuleTrader(ProductTrader):
-    ...
-
-class SnackpackPairsTrader(ProductTrader):
-    ...
-
-class LatticeTrader(ProductTrader):
-    ...
-```
-
-This keeps the strategy classes focused on trading logic instead of repeating order-book and position-limit code.
+This made the rest of the code much cleaner because every strategy could reuse the same basic trading tools.
 
 ---
 
 ## Product Routing
 
-The final `Trader.run()` function routes each product to the correct strategy class.
+The final `Trader.run()` function decides which strategy should trade each product.
 
-The routing logic ensures that each product is traded by only one strategy at a time. This is important because every product has a position limit of `10`, so running multiple strategies on the same product can cause them to compete with each other.
+Instead of mixing all logic together, each product is routed to one trader class.
 
-Example routing structure:
+For example:
 
-```python
-TRADER_BY_PRODUCT = {
-    "MICROCHIP_OVAL": MicrochipRuleTrader,
-    "MICROCHIP_RECTANGLE": MicrochipRuleTrader,
-    "MICROCHIP_TRIANGLE": MicrochipRuleTrader,
-
-    "SNACKPACK_VANILLA": SnackpackPairsTrader,
-    "SNACKPACK_RASPBERRY": SnackpackPairsTrader,
-    "SNACKPACK_CHOCOLATE": SnackpackPairsTrader,
-    "SNACKPACK_STRAWBERRY": SnackpackPairsTrader,
-    "SNACKPACK_PISTACHIO": SnackpackPairsTrader,
-
-    "ROBOT_DISHES": LatticeTrader,
-    "ROBOT_IRONING": LatticeTrader,
-
-    "PEBBLES_S": StaticTrader,
-    "PEBBLES_L": StaticTrader,
-    "PEBBLES_XL": StaticTrader,
-}
+```text
+Microchips     -> MicrochipRuleTrader
+Snackpacks     -> SnackpackPairsTrader
+Lattice names  -> LatticeTrader
+General names  -> StaticTrader
+Pebbles        -> StaticTrader
 ```
 
-Products without a strong statistical signal are handled with a simpler market-making strategy.
+This was important because I did not want two different strategies trading the same product at the same time and fighting over the same position limit.
 
 ---
 
-# Trading Strategies
+# Strategies
 
-The repository contains four main strategy types:
+## 1. Static Market Making
 
-1. **Static Market Making**
-2. **Snackpacks Pairs Trading**
-3. **Microchips Lead-Lag Prediction**
-4. **Lattice Movement Reversal Trading**
+For many products, the best approach was simple market making.
 
-Each strategy is designed for a different type of market structure.
+The strategy places buy and sell orders around the current market. It tries to buy slightly cheaper and sell slightly higher while staying inside the position limit.
 
----
+The basic idea is:
 
-# 1. Static Market Making
-
-## Overview
-
-The static trader is a general-purpose market-making strategy used on products where a more specific alpha signal was either weak, unstable, or not profitable enough.
-
-The strategy tries to capture spread by placing competitive buy and sell orders around the current market.
-
-It is used as a fallback strategy for products that showed reasonable market-making behavior but did not justify a more complex model.
-
----
-
-## Logic
-
-The strategy first calculates a reference midpoint using the wider book structure.
-
-It then:
-
-1. takes clearly mispriced liquidity when prices cross mean-reversion bands
-2. reduces inventory when profitable opportunities appear
-3. places passive quotes near the best bid and best ask
-
-Example:
-
-```python
-buy_band = wall_mid - 2
-sell_band = wall_mid + 2
+```text
+place buy orders near the best bid
+place sell orders near the best ask
+take obvious cheap asks or expensive bids when available
 ```
 
-If asks are cheap relative to the band, the trader buys.
+This worked well as a general strategy because not every product had a strong predictable signal. For those products, capturing spread was more reliable than forcing a complicated model.
 
-If bids are expensive relative to the band, the trader sells.
+I also used this approach for Pebbles in the final version.
 
-After taking opportunities, the strategy places passive quotes:
+---
 
-```python
-bid_price = best_bid + 1
-ask_price = best_ask - 1
+## 2. Pebbles
+
+At first, I tried to trade Pebbles as a basket.
+
+The idea was to compare the combined value of:
+
+```text
+PEBBLES_XS
+PEBBLES_S
+PEBBLES_M
+PEBBLES_L
+PEBBLES_XL
 ```
 
-If the spread is too tight or the quotes would cross, it falls back to quoting at the current best bid and best ask.
+against a target value.
+
+The basket logic checked:
+
+```python
+buy_cost = sum(best_asks)
+sell_proceeds = sum(best_bids)
+```
+
+If the basket looked cheap or expensive, the strategy tried to trade all Pebbles together.
+
+But in testing, this did not give enough profit. The main problem was that there were five legs, each product had a small position limit, and the edge was not always large enough after considering spread and execution.
+
+So I decided to stop using basket arbitrage for Pebbles and instead trade them with the normal market-making strategy.
+
+This was simpler and gave better results.
 
 ---
 
-## Why This Strategy Is Useful
+## 3. Snackpacks
 
-Static market making is simple but robust.
-
-It does not depend on long histories or complex signals. This makes it useful for products where the main edge comes from consistently providing liquidity and capturing small spread opportunities.
-
----
-
-# 2. Snackpacks — Pairs Trading
-
-## Overview
-
-The Snackpack products showed strong relationships with each other, but not every correlated pair produced a tradable signal.
-
-The strongest observed relationship came from the spread:
+For Snackpacks, I found that the most useful signal came from the spread between Vanilla and Raspberry:
 
 ```text
 SNACKPACK_VANILLA - SNACKPACK_RASPBERRY
 ```
 
-This spread displayed mean-reverting behavior and reacted strongly around the `+100` and `-100` regions.
-
----
-
-## Core Signal
-
-The strategy computes:
+The strategy calculates:
 
 ```python
 spread = vanilla_mid - raspberry_mid
 ```
 
-If the spread is high, Vanilla is treated as rich relative to Raspberry.
+When the spread became too high, Vanilla looked expensive compared to Raspberry.
 
-If the spread is low, Vanilla is treated as cheap relative to Raspberry.
+When the spread became too low, Vanilla looked cheap compared to Raspberry.
 
----
-
-## Entry Logic
-
-When:
+The entry logic was:
 
 ```text
-spread >= 100
-```
-
-the strategy enters a short-Vanilla basket:
-
-```text
-short Vanilla
-long Raspberry
-long Chocolate
-short Strawberry
-```
-
-When:
-
-```text
-spread <= -100
-```
-
-the strategy enters a long-Vanilla basket:
-
-```text
-long Vanilla
-short Raspberry
-short Chocolate
-long Strawberry
-```
-
-The basket is designed to express the spread signal across multiple related Snackpack products instead of only trading Vanilla and Raspberry.
-
----
-
-## Sticky Signal Logic
-
-The Snackpack signal is sticky.
-
-If the spread moves back inside the neutral zone, the strategy does not immediately flatten. Instead, it keeps the previous signal.
-
-```python
 if spread >= 100:
-    signal = -1
-elif spread <= -100:
-    signal = 1
-else:
-    signal = previous_signal
+    short Vanilla
+    long Raspberry
+    long Chocolate
+    short Strawberry
+
+if spread <= -100:
+    long Vanilla
+    short Raspberry
+    short Chocolate
+    long Strawberry
 ```
 
-This avoids excessive churn near the threshold.
+I also made the signal sticky. That means if the spread moved back into the normal range, the strategy did not immediately close everything. It kept the previous signal until a new opposite signal appeared.
 
-The goal is to reduce repeated entries and exits when the spread oscillates around the neutral region.
+This helped reduce unnecessary trading when the spread moved around the threshold.
 
----
-
-## Pistachio Handling
-
-`SNACKPACK_PISTACHIO` is excluded from the main basket signal.
-
-Instead, Pistachio is traded with small passive market-making orders.
-
-This is because Pistachio did not provide the same useful relationship as the other Snackpack products in the basket.
+`SNACKPACK_PISTACHIO` was not included in the main basket. I handled it separately with small passive market-making orders.
 
 ---
 
-# 3. Microchips — Lead-Lag Prediction
+## 4. Microchips
 
-## Overview
+For Microchips, I used a lead-lag idea.
 
-The Microchip products showed delayed movement relationships within the same product family.
+The idea was that one microchip product could move first, and another related product could follow later.
 
-The strategy is based on the idea that a large move in one product can predict a later move in another product.
+Instead of using one big model, I wrote simple rules.
 
-Instead of trading raw correlations, the strategy uses a rule-based lead-lag framework.
-
-Each rule contains:
-
-- a leader history
-- a lookback window
-- a movement threshold
-- a holding period
-- a target product
-- a direction mapping
-
----
-
-## Rule Example
+Example rule:
 
 ```python
 {
@@ -280,117 +191,43 @@ Each rule contains:
 }
 ```
 
----
+This means:
 
-## Rule Parameters
+- look at the price history of Circle
+- compare the current price to the price `200` ticks ago
+- if the move is bigger than `110`, create a signal
+- hold that signal for `200` ticks
+- trade Oval based on that signal
 
-| Parameter | Meaning |
-|---|---|
-| `id` | Unique rule identifier |
-| `history` | Stored history series used by the rule |
-| `leader` | Product whose movement is observed |
-| `W` | Lookback window |
-| `H` | Number of ticks to hold the signal |
-| `T` | Movement threshold |
-| `tgt` | Product traded by the rule |
-| `sign` | Direction relationship between leader and target |
-
----
-
-## Signal Logic
-
-For each rule, the strategy measures:
-
-```python
-move = leader_mid_now - leader_mid_W_ticks_ago
-```
-
-If:
+The logic is:
 
 ```text
-move > T
+if leader moved up strongly:
+    buy target
+
+if leader moved down strongly:
+    sell target
 ```
 
-then a positive signal is generated.
-
-If:
+Some rules can vote on the same product. The votes are combined:
 
 ```text
-move < -T
+positive vote -> target long
+negative vote -> target short
+zero vote     -> target flat
 ```
 
-then a negative signal is generated.
+Then the strategy moves the position toward that target.
 
-The signal is then mapped through `sign`:
-
-```text
-positive leader move -> sign
-negative leader move -> -sign
-```
-
-For example, if `sign = 1`, the target is expected to move in the same direction as the leader.
+This worked well because it kept the logic simple but still captured delayed movement between related products.
 
 ---
 
-## Holding Logic
+## 5. Lattice Strategy
 
-Once a signal is triggered, it is held for `H` ticks.
+Some products had large jump-like price movements.
 
-This prevents the strategy from immediately losing conviction after one quiet tick.
-
-The strategy can also reset the hold timer when a new signal appears in the same direction:
-
-```python
-MICRO_RESET_HOLD_ON_SAME_DIRECTION_SIGNAL = True
-```
-
-This allows repeated confirmation from the leader product to extend the target position.
-
----
-
-## Voting System
-
-Multiple rules can vote on the same target product.
-
-Votes are aggregated by target:
-
-```python
-vote > 0  -> target long
-vote < 0  -> target short
-vote = 0  -> target flat
-```
-
-The execution layer then moves the target product toward the desired inventory.
-
-```python
-target_position = position_limit if vote > 0 else -position_limit if vote < 0 else 0
-```
-
----
-
-# 4. Lattice Movements — Grid-Based Reversal
-
-## Overview
-
-The lattice strategy looks for large discrete price jumps.
-
-Instead of reacting to every small price update, the strategy rounds prices onto a grid and compares the current grid price to the previous grid price.
-
-The idea is:
-
-> If price jumps too far too quickly, the move may be an overreaction.
-
-When a large snap move is detected, the strategy trades against the move.
-
----
-
-## Grid Construction
-
-The mid price is rounded to a fixed grid:
-
-```python
-grid_mid = round(mid / grid_size) * grid_size
-```
+For these, I used a lattice strategy. Instead of looking at every small price change, I rounded the mid price to a grid.
 
 Example with grid size `10`:
 
@@ -401,199 +238,110 @@ Example with grid size `10`:
 116 -> 120
 ```
 
-This filters out small book noise.
-
----
-
-## Large Jump Detection
-
-The strategy computes:
+Then I compared the current grid price with the previous grid price:
 
 ```python
 grid_jump = grid_mid - previous_grid
 ```
 
-If:
+If the jump was large enough, the strategy assumed the move may have gone too far.
 
-```python
-abs(grid_jump) >= LATTICE_JUMP_MIN
-```
-
-then a large lattice jump has occurred.
-
----
-
-## Contrarian Signal
-
-The signal is mean-reverting:
+The signal was contrarian:
 
 ```text
 price jumps up   -> short
 price jumps down -> long
 ```
 
-So:
+So if the product jumped upward by a large amount, the strategy sold. If it jumped downward by a large amount, the strategy bought.
 
-```python
-signal = -1 if grid_jump > 0 else 1
-```
-
----
-
-## Regime Tracking
-
-The lattice strategy tracks a simple regime state.
-
-| Regime | Meaning |
-|---|---|
-| `cold` | No active signal |
-| `hundred_snap` | Large jump reversal signal active |
-| `small_lattice` | Smaller move observed after the snap |
-| `stale` | Signal expired |
-
-This regime is saved in `traderData` so the strategy remembers its state across ticks.
-
----
-
-## Exit Logic
-
-The signal can stop in two ways:
-
-1. Smaller lattice moves appear after the snap
-2. The signal becomes stale after too many ticks
-
-This helps prevent the strategy from repeatedly fading strong trends.
-
----
-
-## Execution
-
-When a snap signal is active, the trader moves toward:
-
-```python
-target_position = signal * position_limit
-```
-
-When no snap signal is active, the strategy falls back to small passive market-making orders.
-
----
-
-# Pebbles Approach
-
-## Initial Basket Attempt
-
-The Pebbles products were initially tested as a five-product basket:
+The strategy also tracked regimes like:
 
 ```text
-PEBBLES_XS + PEBBLES_S + PEBBLES_M + PEBBLES_L + PEBBLES_XL
+cold
+hundred_snap
+small_lattice
+stale
 ```
 
-The idea was to compare the combined top-of-book basket value against a fixed target level.
+This helped decide whether the reversal signal was still active or whether it should stop trading aggressively.
 
-```python
-buy_cost = sum(best_asks)
-sell_proceeds = sum(best_bids)
-```
-
-The strategy attempted to unwind existing basket risk when the basket appeared cheap or expensive.
+When there was no active lattice signal, the strategy used small passive market-making orders.
 
 ---
 
-## Why It Was Changed
+## State Persistence
 
-In practice, the Pebbles basket approach did not produce enough profit.
+Some strategies need memory across ticks.
 
-The likely reasons were:
+For example:
 
-- position limits were small
-- five legs made execution harder
-- opportunities required all products to be available at useful prices
-- basket edge was not large enough after spread and fill risk
-- capital was better allocated to simpler spread capture
+- Snackpacks need to remember the previous signal
+- Microchips need to store price histories and hold timers
+- Lattice needs to remember the previous grid price and regime
 
-Because of this, Pebbles were moved to the simpler static market-making strategy.
+I used `traderData` for this.
 
----
-
-# State Persistence
-
-Several strategies depend on memory across ticks.
-
-The code uses `traderData` to persist:
-
-- price histories
-- active signals
-- hold timers
-- spread state
-- previous lattice grid
-- regime labels
-- target votes
-
-At the start of each tick, the previous `traderData` is loaded.
-
-At the end of each tick, updated strategy state is serialized back into JSON.
-
-Example:
+At the start of each tick, the code loads the old data:
 
 ```python
 new_trader_data = json.loads(state.traderData) if state.traderData else {}
+```
+
+At the end of each tick, it saves the updated data:
+
+```python
 final_trader_data = json.dumps(new_trader_data, separators=(",", ":"))
 ```
 
+This allowed the strategies to keep their state while still working inside the IMC trading engine.
+
 ---
 
-# Execution and Risk Management
+## Risk Management
 
-Every strategy respects the competition position limit of `10` per product.
+All products in Round 5 had a position limit of `10`.
 
-The base `ProductTrader` computes:
+The base trader calculates how much more I can buy or sell:
 
 ```python
 max_allowed_buy_volume = position_limit - current_position
 max_allowed_sell_volume = position_limit + current_position
 ```
 
-Orders are clipped to these limits before being submitted.
+Every order is clipped using these limits.
 
-This prevents strategies from exceeding product-level risk limits.
-
----
-
-# Repository Structure
-
-Suggested layout:
-
-```text
-.
-├── README.md
-├── trader.py
-├── datamodel.py
-├── research/
-│   ├── snackpacks.md
-│   ├── microchips.md
-│   ├── lattice.md
-│   └── pebbles.md
-├── backtests/
-│   └── notebooks/
-└── results/
-    └── logs/
-```
+This makes sure the strategy does not place orders that would go beyond the allowed position.
 
 ---
 
-# Strategy Summary
+## Final Approach
 
-| Strategy | Products | Core Signal | Behavior |
-|---|---|---|---|
-| Static Market Making | Selected general products and Pebbles | Book midpoint / spread | Passive quoting and mean-reversion taking |
-| Snackpacks | Vanilla, Raspberry, Chocolate, Strawberry, Pistachio | Vanilla - Raspberry spread | Basket mean reversion |
-| Microchips | Oval, Rectangle, Triangle | Leader movement over window | Lead-lag prediction |
-| Lattice | Selected jumpy products | Large rounded-grid move | Contrarian snap reversal |
+The final approach was not to use one single strategy for everything.
+
+Instead, I used different strategies depending on what worked best for each product group:
+
+| Product Type | Strategy Used |
+|---|---|
+| General products | Static market making |
+| Pebbles | Static market making |
+| Snackpacks | Pairs/basket trading |
+| Microchips | Lead-lag rule trading |
+| Selected jumpy products | Lattice reversal trading |
+
+The most important part was testing which behavior each group had and then choosing the simplest strategy that worked.
 
 ---
 
-# Notes
+## Summary
 
-These strategies were developed specifically for the IMC Prosperity 4 simulation environment.
+Overall, my approach was:
 
-They are competition strategies, not production trading systems. The implementation prioritizes fast iteration, clear signal logic, position-limit safety, and robustness inside the IMC trading engine.
+1. build a reusable base trading class
+2. test different strategies on different product groups
+3. keep the strategies that showed useful behavior
+4. route each product to only one strategy
+5. use `traderData` to store state between ticks
+6. keep all orders inside the position limit
+
+These strategies were written specifically for the IMC Prosperity 4 simulation environment. They are not meant to be production trading systems, but they show how I approached signal research, strategy design, and code structure during the competition.
