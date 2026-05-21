@@ -216,3 +216,11 @@ __marimo__/
 
 # Streamlit
 .streamlit/secrets.toml
+
+# --- IMC Prosperity 4 Trading Data & Logs ---
+*.csv
+*.xlsx
+*.parquet
+*.h5
+*.log
+
