@@ -1,11 +1,4 @@
-# IMC Prosperity 4 Trading Strategies
-
-This repository contains my algorithmic trading code for the IMC Prosperity 4 competition.
-
-The final trading system is built around a reusable `ProductTrader` base class and several product-specific strategy classes. Each strategy focuses on a different type of market behavior observed during research and backtesting.
-
-The goal of the codebase is to make strategy development repeatable: shared trading utilities live in one place, while each product strategy only contains the logic needed to generate signals and orders.
-
+# Round 5 Trading Strategies Detailed Explanation
 ---
 
 ## Core Architecture
