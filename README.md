@@ -235,8 +235,9 @@ My final approach for Rounds 3 and 4 was:
 
 The final strategy was simpler than a full options-pricing model, but it was more practical for the competition environment and worked better with the available signals.
 
+# Rounds 5 Strategy
 
-## What I Tried
+# What I Tried
 
 Round 5 introduced 50 new products across 10 different product groups. Since every product had a position limit of `10`, I had to be selective about which products and strategies were worth using.
 
